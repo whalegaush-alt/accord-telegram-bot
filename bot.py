@@ -1,62 +1,100 @@
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler,
-    MessageHandler, ContextTypes, filters
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters
 )
+
 import os
 import psycopg2
 from datetime import date
 
+# ================== CONFIG ==================
+
 TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-conn = psycopg2.connect(DATABASE_URL)
-cur = conn.cursor()
+# ================== DB ==================
 
-cur.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    id SERIAL PRIMARY KEY,
-    telegram_id BIGINT UNIQUE,
-    name TEXT
-)
-""")
+def get_db():
+    return psycopg2.connect(
+        DATABASE_URL,
+        sslmode="require"
+    )
 
-cur.execute("""
-CREATE TABLE IF NOT EXISTS records (
-    id SERIAL PRIMARY KEY,
-    user_id INTEGER REFERENCES users(id),
-    work_date DATE,
-    a INTEGER, b INTEGER, c INTEGER, d INTEGER, x INTEGER,
-    hours REAL,
-    result REAL
-)
-""")
-conn.commit()
+def init_db():
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        telegram_id BIGINT UNIQUE,
+        name TEXT
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS records (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id),
+        work_date DATE,
+        a INTEGER,
+        b INTEGER,
+        c INTEGER,
+        d INTEGER,
+        x INTEGER,
+        hours REAL,
+        result REAL
+    )
+    """)
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+# ================== LOGIC ==================
 
 def calculate(data):
-    y = data["a"]*15 + data["b"] + data["c"]*2 + data["d"]*10 + data["x"]*80
+    y = data["a"] * 15 + data["b"] + data["c"] * 2 + data["d"] * 10 + data["x"] * 80
     z = 800 * data["h"]
     i = y - z
     t = i / data["h"]
     return round(t / 100, 2), y, z, i
 
+# ================== HANDLERS ==================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_id = update.effective_user.id
     name = update.effective_user.first_name
 
-    cur.execute("SELECT id FROM users WHERE telegram_id=%s", (tg_id,))
-    if not cur.fetchone():
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT id FROM users WHERE telegram_id=%s",
+        (tg_id,)
+    )
+    row = cur.fetchone()
+
+    if not row:
         cur.execute(
             "INSERT INTO users (telegram_id, name) VALUES (%s,%s)",
             (tg_id, name)
         )
         conn.commit()
 
+    cur.close()
+    conn.close()
+
     keyboard = [["➕ Add"]]
     await update.message.reply_text(
-        "Добро пожаловать 👋",
+        "Добро пожаловать 👋\nНажмите ➕ Add для расчёта",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
+
     context.user_data.clear()
 
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -74,7 +112,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         value = float(text)
-    except:
+    except ValueError:
         await update.message.reply_text("Введите число")
         return
 
@@ -108,6 +146,9 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         result, y, z, i = calculate(context.user_data)
 
+        conn = get_db()
+        cur = conn.cursor()
+
         cur.execute(
             "SELECT id FROM users WHERE telegram_id=%s",
             (update.effective_user.id,)
@@ -116,10 +157,11 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         cur.execute("""
         INSERT INTO records
-        (user_id, work_date, a,b,c,d,x,hours,result)
+        (user_id, work_date, a, b, c, d, x, hours, result)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """, (
-            user_id, date.today(),
+            user_id,
+            date.today(),
             context.user_data["a"],
             context.user_data["b"],
             context.user_data["c"],
@@ -128,7 +170,10 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["h"],
             result
         ))
+
         conn.commit()
+        cur.close()
+        conn.close()
 
         await update.message.reply_text(
             f"📊 Результат за {date.today()}:\n"
@@ -140,10 +185,15 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         context.user_data.clear()
 
+# ================== MAIN ==================
+
 def main():
+    init_db()
     app = ApplicationBuilder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
+
     app.run_polling()
 
 if __name__ == "__main__":
