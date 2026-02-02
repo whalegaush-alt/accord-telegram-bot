@@ -54,8 +54,14 @@ def get_or_create_user(telegram_id, name):
 
 
 def save_record(user_id, data, result):
-    conn = get_db_connection()
+    print("👉 SAVE_RECORD CALLED")
+    print("👉 DATABASE_URL =", DATABASE_URL)
+
+    conn = psycopg2.connect(DATABASE_URL, sslmode="require")
     cur = conn.cursor()
+
+    cur.execute("SELECT current_database(), current_schema();")
+    print("👉 DB INFO =", cur.fetchone())
 
     cur.execute("""
         INSERT INTO records
@@ -74,6 +80,8 @@ def save_record(user_id, data, result):
     ))
 
     conn.commit()
+    print("✅ COMMIT DONE")
+
     cur.close()
     conn.close()
 
